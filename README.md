@@ -37,13 +37,23 @@ LLM_MODEL=deepseek-chat
 返回与 mock 同结构对象，并在 `getEnvironment()` 按 `MARKET_SOURCE` 切换。
 
 ## 部署到 Railway（推荐，免费起步 → 低成本）
-1. 将本目录推到 GitHub 仓库
-2. 登录 https://railway.app → New Project → Deploy from GitHub repo
-3. 无需额外配置（已含 Dockerfile / Procfile / package.json）
-4. 部署完成后 Railway 给出 `https://xxx.up.railway.app` 永久可用网址
-5. （可选）Variables 中添加 `LLM_API_KEY` 等启用真实大模型
+1. 将本目录推到 GitHub 仓库（本项目已推送至 `git@github.com:aurora-am/ai-youzi-chat.git`）
+2. 登录 https://railway.app → **New Project** → **Deploy from GitHub repo** → 选 `ai-youzi-chat`
+3. 无需额外配置（已含 Dockerfile，且已内置 `build-base + python3` 以编译 `better-sqlite3`）
+4. **挂持久卷（重要）**：进入项目 → **Settings / Volumes** → 新增 Volume，挂载路径填 `/app/data`。
+   不挂卷时，Railway 每次部署/重启会重置容器文件系统，角色增删改（admin 页操作）会丢失；
+   挂卷后 SQLite 持久化，改动长期保留（即使重置也会从 `roles.json` 种子重建 8 个初始角色）。
+5. 部署完成后 Railway 给出 `https://xxx.up.railway.app` 永久可用网址
+6. （可选）**Variables** 中添加 `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` 启用真实大模型；
+   添加 `PORT` 一般不需要（Railway 自动注入）。
 
 > 国内访问 Railway 偶有波动，可后续绑定自定义域名 + CDN 提速。
+
+### 本地 Docker 预览（可选）
+```bash
+docker build -t ai-youzi-chat .
+docker run -p 3000:3000 -v ai-youzi-data:/app/data ai-youzi-chat
+```
 
 ## 目录结构
 ```
