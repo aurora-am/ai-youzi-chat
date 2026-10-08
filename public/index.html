@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AI 游资群聊</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 顶栏 -->
+    <div class="topbar">
+      <div class="logo">📡</div>
+      <div>
+        <h1>AI 游资群聊</h1>
+        <div class="sub">8 大游资 · 实时模拟 · 市场环境下动态点将</div>
+      </div>
+      <div class="spacer"></div>
+      <select id="envSelect" title="强制指定环境（演示用）">
+        <option value="">环境：随机</option>
+        <option value="strong">强势</option>
+        <option value="weak">弱势</option>
+        <option value="shock">震荡</option>
+        <option value="freeze">情绪冰点</option>
+        <option value="recover">情绪回暖</option>
+      </select>
+      <button class="btn" id="newRound">🔄 新一局</button>
+      <a class="btn ghost" href="/admin.html">⚙ 管理</a>
+    </div>
+
+    <!-- 环境横幅 -->
+    <div class="env-banner" id="envBanner">
+      <span class="env-state shock">等待开盘…</span>
+      <div class="env-metrics" id="envMetrics"></div>
+    </div>
+
+    <!-- 消息区 -->
+    <div class="chat" id="chat"></div>
+
+    <div class="footer-note">
+      ⚠️ 本群聊由 AI 模拟生成，仅供娱乐与复盘交流，所有内容不构成任何投资建议。
+    </div>
+  </div>
+
+  <script src="/js/chat.js"></script>
+</body>
+</html>

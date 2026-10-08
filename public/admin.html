@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>角色管理 · AI 游资群聊</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="admin-wrap">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+      <h2 style="margin:0;">🎭 角色管理</h2>
+      <a class="btn ghost" href="/">← 返回群聊</a>
+    </div>
+    <p class="muted">编辑 / 新增 / 删除游资角色；改动实时写入数据库，刷新群聊即生效。性格：aggressive 激进 / steady 稳健 / cautious 谨慎；勾选“情绪锚点”后，情绪冰点/回暖由其主持。</p>
+
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th>头像</th><th>昵称(id)</th><th>性格</th><th>锚点</th><th>持仓偏好</th>
+          <th>风格</th><th>启用</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+
+    <h3 style="margin-top:24px;">✏️ 新增 / 编辑角色</h3>
+    <div class="form-grid">
+      <label>ID（英文，唯一）<input id="f_id" placeholder="如 xinyouzi" /></label>
+      <label>昵称<input id="f_name" placeholder="如 新游资" /></label>
+      <label>头像（emoji 或 URL）<input id="f_avatar" placeholder="如 🚀" /></label>
+      <label>性格
+        <select id="f_personality">
+          <option value="aggressive">aggressive 激进</option>
+          <option value="steady">steady 稳健</option>
+          <option value="cautious">cautious 谨慎</option>
+        </select>
+      </label>
+      <label>持仓偏好<input id="f_holding_pref" placeholder="如 连板、趋势" /></label>
+      <label>说话风格<input id="f_style" placeholder="如 犀利" /></label>
+      <label>情绪锚点<input id="f_anchor" type="checkbox" style="width:auto;align-self:flex-start;margin-top:6px;" /></label>
+      <label>启用<input id="f_active" type="checkbox" checked style="width:auto;align-self:flex-start;margin-top:6px;" /></label>
+      <label style="grid-column:1/-1;">人设描述<textarea id="f_persona"></textarea></label>
+      <label style="grid-column:1/-1;">大模型提示词（system_prompt）<textarea id="f_system_prompt"></textarea></label>
+      <label style="grid-column:1/-1;">风格化免责话术<textarea id="f_disclaimer"></textarea></label>
+      <div class="form-actions">
+        <button class="btn" id="saveBtn">💾 保存</button>
+        <button class="btn ghost" id="resetBtn">清空表单</button>
+        <span id="msg" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/admin.js"></script>
+</body>
+</html>

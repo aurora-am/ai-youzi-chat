@@ -1,0 +1,16 @@
+{
+  "name": "ai-youzi-chat",
+  "version": "1.0.0",
+  "description": "AI 游资群聊 —— 模拟 8 大游资实时群聊，市场环境下动态点将调度。",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.19.2"
+  }
+}
