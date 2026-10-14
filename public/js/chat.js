@@ -27,6 +27,15 @@
         <span>情绪分 <b>${env.emotionScore}</b></span>
         <span>数据源 <b>${env.source}</b></span>
       </div>`;
+
+    // 数据缺失横幅：接口不可达时如实提示，绝不冒充真实数据
+    const missEl = document.getElementById('dataMissing');
+    if (env.dataMissing) {
+      missEl.textContent = '⚠️ 实时行情接口暂不可达（已降级为模拟数据）：' + (env.missingReason || '');
+      missEl.style.display = 'block';
+    } else {
+      missEl.style.display = 'none';
+    }
   }
 
   // 把消息文本拆分为“正文 + 免责话术（『…』）”，并对 @对象 高亮

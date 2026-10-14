@@ -2,9 +2,14 @@
 // -----------------------------------------------------------------------------
 // 行情环境中枢：判断当前市场处于 强 / 弱 / 震荡 / 情绪冰点 / 情绪回暖 五态之一。
 //
-// 当前为【mock 实现】（按用户要求先用模拟数据跑通全套调度与界面）。
-// 真实接口（东方财富 / 通达信）的接入位置已在文件底部 TODO 标注，并列出待接字段。
-// 对外统一入口 getEnvironment(forced?) 返回结构固定，切换真实源时无需改调度层。
+// 【真实行情接入】默认尝试调用东方财富公开行情接口（push2，免账号/免 token），
+//   获取：上证涨跌幅、涨跌家数、涨停/跌停数、行业板块领涨、板块领涨股。
+//   接口不可达（本机无外网 / 非交易时段接口变更 / 网络拦截）时，
+//   自动降级为 mock 并在 env 上打 dataMissing 标记 + 缺失原因 + 刷新命令，
+//   前端据此展示「数据缺失」提示（严格遵守数据真实性原则，绝不伪造）。
+//
+// 对外统一入口 getEnvironment(forced?) 返回结构固定（契约），
+//   调度层 / 生成器只依赖该结构，切换数据源无需改其它模块。
 // -----------------------------------------------------------------------------
 
 // 五种环境状态
@@ -19,7 +24,7 @@ const ENV_LABEL = {
   recover: '情绪回暖',
 };
 
-// 不同环境侧重的不同题材/行业池（供生成器取用，使对话贴合环境）
+// 不同环境侧重的不同题材/行业池（仅 mock 兜底用；真实模式下用东财实时板块）
 const SECTORS = {
   strong: ['大金融', 'AI算力', '半导体', '中字头', '券商'],
   weak: ['高股息', '公用事业', '医药防御', '黄金'],
@@ -28,10 +33,157 @@ const SECTORS = {
   recover: ['新题材龙头', '共振板块', '超跌反弹'],
 };
 
-function rand(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
+// 东财公开接口请求头（带 UA/Referer，避免被拒）
+const EM_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+  Referer: 'https://quote.eastmoney.com/',
+};
+
+// 通用抓取（带 8s 超时 + 基础校验）
+async function emGet(url) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(url, { headers: EM_HEADERS, signal: ctrl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    if (!j || j.rc !== 0) throw new Error('接口返回异常 rc=' + (j && j.rc));
+    return j;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
+// 板级涨停阈值：主板 10% / 创业板·科创板 20% / 其它 10%（北交已排除）
+function limitThreshold(code) {
+  const c = String(code);
+  if (/^(30|688)/.test(c)) return 20;
+  return 10;
+}
+
+// 是否交易时段（本机本地时间近似，未做时区换算，适用于中国时区机器）
+function isTradingNow() {
+  const d = new Date();
+  const day = d.getDay();
+  if (day === 0 || day === 6) return false; // 周末
+  const m = d.getHours() * 60 + d.getMinutes();
+  return (m >= 570 && m <= 690) || (m >= 780 && m <= 900); // 9:30-11:30 / 13:00-15:00
+}
+
+// 由真实指标推导五态
+function deriveState(indexPct, breadth, limitUp, limitDown, emotion) {
+  if (emotion <= 22 && limitUp <= 20) return 'freeze';          // 情绪冰点
+  if (emotion >= 55 && limitUp >= 45 && indexPct > 0.4) return 'recover'; // 情绪回暖
+  if (indexPct >= 0.8 && breadth > 0.25) return 'strong';       // 强势
+  if (indexPct <= -0.8 && breadth < -0.25) return 'weak';       // 弱势
+  return 'shock';                                               // 震荡
+}
+
+// 计算情绪分（0-100）：涨跌家数比 + 涨停数 + 跌停数 + 指数
+function computeEmotion(up, down, limitUp, limitDown, indexPct) {
+  const total = up + down || 1;
+  const breadth = (up - down) / total; // -1..1
+  let score = 50 + breadth * 35;
+  score += Math.min(limitUp, 120) / 120 * 15;
+  score -= Math.min(limitDown, 80) / 80 * 10;
+  score += Math.max(-2, Math.min(2, indexPct)) / 2 * 10;
+  return Math.round(Math.max(0, Math.min(100, score)));
+}
+
+// ===================== 真实行情：东方财富 =====================
+async function fetchEastMoney() {
+  // 1) 上证指数（secid: 1.000001）
+  const idxUrl =
+    'https://push2.eastmoney.com/api/qt/stock/get?secid=1.000001&fields=f43,f57,f58,f169,f170';
+  // 2) 全量 A 股快照（沪深主板 + 创业 + 科创，不含北交），用于涨跌家数 / 涨停跌停
+  const snapUrl =
+    'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=8000&fid=f3' +
+    '&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14,f2,f3';
+  // 3) 行业板块（取涨幅榜），用于真实热点板块
+  const sectorUrl =
+    'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=30&fid=f3' +
+    '&fs=m:90+t:2&fields=f12,f14,f3,f62';
+
+  const [idxRes, snapRes, secRes] = await Promise.all([
+    emGet(idxUrl), emGet(snapUrl), emGet(sectorUrl),
+  ]);
+
+  // —— 指数 ——
+  const idx = idxRes.data || {};
+  const indexChangePct = idx.f170 != null ? Number(idx.f170) : 0;
+
+  // —— 涨跌家数 / 涨停跌停（板级阈值）——
+  const list = (snapRes.data && snapRes.data.diff) || [];
+  let up = 0, down = 0, limitUp = 0, limitDown = 0;
+  for (const s of list) {
+    const chg = Number(s.f3);
+    if (isNaN(chg)) continue;
+    if (chg > 0) up++;
+    else if (chg < 0) down++;
+    const th = limitThreshold(s.f12) - 0.15; // 容差
+    if (chg >= th) limitUp++;
+    else if (chg <= -th) limitDown++;
+  }
+
+  // —— 热点板块（按涨幅排序取前 8）——
+  const secList = (secRes.data && secRes.data.diff) || [];
+  const hot = secList
+    .map((s) => ({
+      bk: s.f12,                       // 板块代码（如 BK0735）
+      name: s.f14,                     // 板块名称
+      changePct: Number(s.f3),         // 板块涨跌幅%
+      leader: null,                    // 领涨股（稍后并发补全）
+    }))
+    .filter((s) => !isNaN(s.changePct))
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, 8);
+
+  // —— 并发补全各热点板块的领涨股（取板块内涨幅第 1 的个股）——
+  await Promise.all(
+    hot.map(async (sec) => {
+      try {
+        if (!sec.bk) return;
+        const u =
+          'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=3&fid=f3' +
+          `&fs=b:${sec.bk}+f:!50&fields=f12,f14,f3`;
+        const r = await emGet(u);
+        const cons = (r.data && r.data.diff) || [];
+        if (cons.length) {
+          cons.sort((a, b) => Number(b.f3) - Number(a.f3));
+          sec.leader = { name: cons[0].f14, code: String(cons[0].f12) };
+        }
+      } catch (_) {
+        /* 单板块领涨股失败不影响整体，leader 留 null 走 mock 回退 */
+      }
+    })
+  );
+
+  // —— 情绪分 & 状态推导 ——
+  const breadth = up + down ? (up - down) / (up + down) : 0;
+  const emotionScore = computeEmotion(up, down, limitUp, limitDown, indexChangePct);
+  const state = deriveState(indexChangePct, breadth, limitUp, limitDown, emotionScore);
+
+  // —— 组装（契约结构，与 mock 一致）——
+  const sectorDetails = {};
+  hot.forEach((s) => (sectorDetails[s.name] = { changePct: s.changePct, leader: s.leader }));
+  return {
+    state,
+    label: ENV_LABEL[state],
+    indexChangePct: Number(indexChangePct.toFixed(2)),
+    upCount: up,
+    downCount: down,
+    limitUp,
+    limitDown,
+    emotionScore,
+    source: 'eastmoney',
+    sectors: hot.map((s) => s.name), // 真实热点板块名（供生成器取用）
+    sectorDetails,                   // 板块 → {changePct, leader}
+    tradingSession: isTradingNow(),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+// ===================== mock 兜底 =====================
 // 由状态推导一组“拟真”的行情指标（仅 mock 用）
 function metricsOf(state) {
   return {
@@ -43,73 +195,62 @@ function metricsOf(state) {
   }[state];
 }
 
-// 生成一份 mock 行情环境对象（结构即“契约”，真实源需对齐）
-function getMockEnvironment() {
-  const state = rand(ENV_STATES);
-  const m = metricsOf(state);
+function buildMock(state) {
+  const st = state || ENV_STATES[Math.floor(Math.random() * ENV_STATES.length)];
+  const m = metricsOf(st);
   return {
-    state, // 五态枚举
-    label: ENV_LABEL[state], // 中文标签
-    indexChangePct: m.indexChangePct, // 上证涨跌幅(%)
-    upCount: m.up, // 上涨家数
-    downCount: m.down, // 下跌家数
-    limitUp: m.limitUp, // 涨停家数
-    limitDown: m.limitDown, // 跌停家数
-    emotionScore: m.emotion, // 情绪分(0-100)
-    source: 'mock', // 数据来源：mock / eastmoney / tonghuaxin
-    sectors: SECTORS[state], // 本环境侧重题材（供生成器）
-    // ===== 真实接口待接字段占位（接入东财/通达信后填充）=====
-    // realFields: {
-    //   indexCode: 'sh000001',                 // 指数代码（如上证 sh000001）
-    //   apiBase: '',                           // 行情基地址
-    //   apiKey: process.env.MARKET_API_KEY,     // 如需鉴权
-    //   snapshotUrl: '',                       // 实时快照接口
-    // }
+    state: st,
+    label: ENV_LABEL[st],
+    indexChangePct: m.indexChangePct,
+    upCount: m.up,
+    downCount: m.down,
+    limitUp: m.limitUp,
+    limitDown: m.limitDown,
+    emotionScore: m.emotion,
+    source: 'mock',
+    sectors: SECTORS[st],
+    sectorDetails: {}, // mock 无板块明细，生成器走 STOCK_POOL 回退
   };
 }
 
-// 对外统一入口
-//   forced: 可强制指定环境（'strong'|'weak'|'shock'|'freeze'|'recover'），便于演示与测试
-function getEnvironment(forced) {
-  if (forced && ENV_STATES.includes(forced)) {
-    const e = getMockEnvironment();
-    const m = metricsOf(forced);
-    e.state = forced;
-    e.label = ENV_LABEL[forced];
-    e.source = 'mock(forced)';
-    e.indexChangePct = m.indexChangePct;
-    e.upCount = m.up;
-    e.downCount = m.down;
-    e.limitUp = m.limitUp;
-    e.limitDown = m.limitDown;
-    e.emotionScore = m.emotion;
-    e.sectors = SECTORS[forced];
-    return e;
+// 降级为 mock，并标注数据缺失（前端展示警告）
+function mockWithMissing(reason) {
+  const e = buildMock(null);
+  e.source = 'mock(degraded)';
+  e.dataMissing = true;
+  e.missingReason = reason;
+  e.refreshCmd = '确认本机可访问 https://push2.eastmoney.com 后，重启 node server.js 并刷新页面。';
+  return e;
+}
+
+// ===================== 对外统一入口 =====================
+//   forced: 强制指定环境（'strong'|'weak'|'shock'|'freeze'|'recover'）→ 返回 mock（演示用）
+//   无 forced: 默认尝试真实东财行情；可用环境变量 MARKET_SOURCE=mock 强制纯模拟
+let _cache = null;
+let _cacheAt = 0;
+const CACHE_TTL = 30 * 1000; // 30s 内复用，减少接口调用
+
+async function getEnvironment(forced) {
+  // 演示强制环境：始终返回对应 mock
+  if (forced && ENV_STATES.includes(forced)) return buildMock(forced);
+
+  // 环境变量可强制纯模拟（便于无网环境演示）
+  const source = (process.env.MARKET_SOURCE || 'eastmoney').toLowerCase();
+  if (source === 'mock') return buildMock(null);
+
+  // 真实行情：带 30s 缓存
+  const now = Date.now();
+  if (_cache && now - _cacheAt < CACHE_TTL) return _cache;
+  try {
+    const env = await fetchEastMoney();
+    _cache = env;
+    _cacheAt = now;
+    return env;
+  } catch (err) {
+    // 绝不伪造：接口不可达 → 降级 mock + 数据缺失标记
+    const reason = '东财实时接口不可达：' + (err && err.message ? err.message : String(err));
+    return mockWithMissing(reason);
   }
-  return getMockEnvironment();
 }
-
-/*
-================================================================================
-TODO —— 真实行情接入（东方财富 / 通达信）
---------------------------------------------------------------------------------
-1) 东方财富：可用其公开行情接口（如 push2 行情、涨跌家数、涨跌停数据）获取
-   indexChangePct / upCount / downCount / limitUp / limitDown。
-2) 通达信：通常需行情网关或本地客户端，可能需账号；获取方式依其 API 而定。
-3) 情绪分 emotionScore 建议由：涨停数、连板高度、昨日涨停今日表现、涨跌家数比
-   等加权合成（0-100）。
-4) 实现下方两个函数，返回与 getMockEnvironment() 完全同结构的对象，并在
-   getEnvironment() 中按 process.env.MARKET_SOURCE 切换（'mock'|'eastmoney'|'tonghuaxin'）。
-
-async function fetchRealEastMoney() {
-  // const res = await fetch(`https://push2.eastmoney.com/...`);
-  // return { state, label, indexChangePct, upCount, downCount, limitUp, limitDown, emotionScore, source:'eastmoney', sectors };
-}
-
-async function fetchRealTongHuXin() {
-  // 通达信行情接口实现
-}
-================================================================================
-*/
 
 module.exports = { getEnvironment, ENV_LABEL, ENV_STATES, SECTORS };

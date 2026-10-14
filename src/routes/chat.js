@@ -17,8 +17,8 @@ const { buildSession } = require('../scheduler');
 const { generateMessage } = require('../generator');
 
 // 当前环境（?env=strong|weak|shock|freeze|recover 可强制指定，便于演示）
-router.get('/environment', (req, res) => {
-  res.json(getEnvironment(req.query.env));
+router.get('/environment', async (req, res) => {
+  res.json(await getEnvironment(req.query.env));
 });
 
 // SSE 实时群聊流
@@ -32,7 +32,7 @@ router.get('/chat/stream', async (req, res) => {
   });
 
   // 取环境（可强制）与角色
-  const envObj = getEnvironment(req.query.env);
+  const envObj = await getEnvironment(req.query.env);
   const rows = getDb().prepare('SELECT * FROM roles').all();
   const roles = rows.map(normalize);
   const rolesById = Object.fromEntries(roles.map((r) => [r.id, r]));
@@ -51,6 +51,8 @@ router.get('/chat/stream', async (req, res) => {
     hostId: session.hostId,
     envLabel: session.envLabel,
     total: session.turns.length,
+    dataMissing: !!envObj.dataMissing,
+    missingReason: envObj.missingReason || null,
   });
 
   // 2) 逐条推送消息（带随机延迟，模拟真人打字节奏）

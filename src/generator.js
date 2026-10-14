@@ -69,11 +69,11 @@ const ENTRY_POOL = {
   emotion: ['冰点后首根放量阳线就是信号', '情绪回暖确认时跟随', '拐点共振处轻仓试错'],
 };
 
-// 按板块取一只具体主板标的（mock）
+// 按板块取一只具体主板标的（mock）；未知板块返回 null（绝不杜撰占位代码）
 function pickStock(sector) {
   const pool = STOCK_POOL[sector];
   if (pool && pool.length) return pick(pool);
-  return { name: '核心标的', code: '------' };
+  return null;
 }
 
 // 模板库：按阵营分桶，每桶含 open(开场) / speak(普通发言) / respond(@回应) / close(收尾)
@@ -185,25 +185,52 @@ function generateMessage({ role, turn, envObj, rolesById }) {
   const sector = pick(envObj.sectors);
   let text = fill(tpl, { envLabel: envObj.label, sector, targetName });
 
-  // ===== 新增：具体板块 + 具体标的（模拟示例，非真实推荐）=====
-  const stock = pickStock(sector);
-  const logic = LOGIC_POOL[sector] || FALLBACK_LOGIC;
+  // ===== 具体板块 + 具体标的 =====
+  // 优先用真实领涨股（来自东财实时板块明细），缺失则回退 mock 标的池；
+  // 两者皆无时只谈板块名，绝不杜撰占位代码（数据真实性原则）。
+  const detail = envObj.sectorDetails && envObj.sectorDetails[sector];
+  let stock = null;
+  if (detail && detail.leader && /^\d{6}$/.test(String(detail.leader.code))) {
+    stock = detail.leader; // 真实领涨股（6 位代码）
+  }
+  const realStock = !!stock; // 是否拿到真实领涨股
+  if (!stock) stock = pickStock(sector); // mock 池回退（未知板块返回 null）
+  const noCode = !stock || stock.code === '------'; // 仍无具体代码 → 只用板块名
+  const tag = realStock ? '真实行情快照' : '模拟示例';
+
+  // 板块买入逻辑：命中词库 / 用真实涨幅动态生成 / 兜底
+  let logic;
+  if (LOGIC_POOL[sector]) {
+    logic = LOGIC_POOL[sector];
+  } else if (detail && typeof detail.changePct === 'number') {
+    const pct = detail.changePct;
+    logic = `板块今日${pct >= 0 ? '+' : ''}${pct}%，${pct >= 0 ? '资金聚焦、弹性可期' : '逆势承压、需精挑活口'}`;
+  } else {
+    logic = FALLBACK_LOGIC;
+  }
   const entry = pick(ENTRY_POOL[c] || ENTRY_POOL.steady);
+
+  // 主语：有具体股用「名称（代码）」，否则只用板块名（不编代码）
+  const subj = noCode ? `${sector} 板块` : `${stock.name}（${stock.code}）`;
+  const lead = { aggressive: '具体就干', steady: '重点看', cautious: '只等', emotion: '拐点看' }[c] || '看';
+
   let stockLine = '';
   if (turn.type === 'open') {
-    // 开场定调：点一只代表标的作为方向锚（标注模拟）
-    stockLine = `\n（模拟示例）方向上先看 ${stock.name}（${stock.code}）这类核心。`;
+    // 开场定调：点一只代表标的作为方向锚
+    stockLine = `\n（${tag}）方向上先看 ${subj}核心。`;
   } else if (turn.type === 'close') {
     // 收尾：给可执行结论——具体买什么
-    stockLine = `\n可执行结论（模拟）：重点看 ${stock.name}（${stock.code}）——${logic}；${entry}。`;
+    stockLine = `\n可执行结论（${tag}）：重点盯 ${subj}——${logic}；${entry}。`;
   } else {
     // 主体发言：具体看哪只票、什么逻辑、什么买点
-    const lead = { aggressive: '具体就干', steady: '重点看', cautious: '只等', emotion: '拐点看' }[c] || '看';
-    stockLine = `\n具体看 ${stock.name}（${stock.code}）：${lead}——${logic}，${entry}。`;
+    stockLine = `\n具体看 ${subj}：${lead}——${logic}，${entry}。`;
   }
 
-  // 免责话术强化：明确标的与价位均为模拟示例
-  return text + stockLine + ' 『' + role.disclaimer + '（标的与价位均为模拟示例）』';
+  // 免责话术：真实快照 vs 纯模拟，标注区分（数据真实性原则）
+  const simNote = realStock
+    ? '（板块/个股取自真实行情快照，买卖点与逻辑为模拟推演，不构成投资建议）'
+    : '（标的与价位均为模拟示例）';
+  return text + stockLine + ' 『' + role.disclaimer + simNote + '』';
 }
 
 /*
